@@ -156,19 +156,25 @@ class ldapchecker implements userstatusinterface {
      */
     public function get_never_logged_in() {
         global $DB;
-        $select = "auth='" . $this->config->auth_method . "' AND lastaccess=0 AND deleted=0 AND firstname!='Anonym'";
-        $arrayofuser = $DB->get_records_select('user', $select);
-        $neverloggedin = array();
+        $arrayofuser = $DB->get_records_sql(
+            "SELECT u.id, u.suspended, u.lastaccess, u.username, u.deleted
+                FROM {user} u
+                LEFT JOIN {tool_cleanupusers} tc ON u.id = tc.id
+                WHERE u.auth = '" . $this->config->auth_method . "'
+                    AND u.lastaccess = 0
+                    AND u.deleted = 0
+                    AND tc.id IS NULL"
+        );
+
+        $neverloggedin = [];
         foreach ($arrayofuser as $key => $user) {
-            if (empty($user->lastaccess) && $user->deleted == 0) {
-                $informationuser = new archiveduser(
-                    $user->id,
-                    $user->suspended,
-                    $user->lastaccess,
-                    $user->username,
-                    $user->deleted);
-                $neverloggedin[$key] = $informationuser;
-            }
+            $informationuser = new archiveduser(
+                $user->id,
+                $user->suspended,
+                $user->lastaccess,
+                $user->username,
+                $user->deleted);
+            $neverloggedin[$key] = $informationuser;
         }
 
         return $neverloggedin;
@@ -187,34 +193,37 @@ class ldapchecker implements userstatusinterface {
     public function get_to_delete() {
         global $DB;
 
-        // Select clause for users who are suspended.
-        $select = "auth='" . $this->config->auth_method . "' AND deleted=0 AND suspended=1 AND (lastaccess!=0 OR firstname='Anonym')";
-        $users = $DB->get_records_select('user', $select);
-        $todelete = array();
+        if (count($this->lookup) == 0) {
+            $this->log("no users from LDAP found => do not evaluate users to delete");
+            return [];
+        }
+
+        $users = $DB->get_records_sql(
+            "SELECT tca.id, tca.suspended, tca.lastaccess, tca.username, tca.deleted
+                FROM {user} u
+                JOIN {tool_cleanupusers} tc ON u.id = tc.id
+                JOIN {tool_cleanupusers_archive} tca ON u.id = tca.id
+                WHERE u.auth = '" . $this->config->auth_method . "'
+                    AND u.suspended = 1
+                    AND u.deleted = 0
+                    AND tc.timestamp < :timelimit",
+            [
+                'timelimit'  => time() - $this->timedelete,
+            ]
+        );
+        $todelete = [];
 
         foreach ($users as $key => $user) {
-            if (!is_siteadmin($user)) {
-                $mytimestamp = time();
-                // User was suspended by the plugin.
-                if ($DB->record_exists('tool_cleanupusers', array('id' => $user->id))) {
-                    $tableuser = $DB->get_record('tool_cleanupusers', array('id' => $user->id));
-                    $timearchived = $tableuser->timestamp;
-                    $timenotloggedin = $mytimestamp - $timearchived;
-                    // When the user did not sign in for the timedeleted he/she should be deleted.
-                    if ($timenotloggedin > $this->timedelete) {
-                        if ($DB->record_exists('tool_cleanupusers_archive', array('id' => $user->id))) {
-                            $shadowtableuser = $DB->get_record('tool_cleanupusers_archive', array('id' => $user->id));
-                            $informationuser = new archiveduser($shadowtableuser->id, $shadowtableuser->suspended,
-                                $shadowtableuser->lastaccess, $shadowtableuser->username, $shadowtableuser->deleted);
-                            $todelete[$key] = $informationuser;
-                            $this->log("[get_to_delete] "
-                                . $shadowtableuser->username . " / " . $user->username . " (suspended by plugin) marked");
-                        } else {
-                            $this->log("[get_to_delete] "
-                                . $user->username . " (suspended by plugin) has no entry in archive, skipping");
-                        }
-                    }
-                }
+            if (!is_siteadmin($user) && !array_key_exists($user->username, $this->lookup)) {
+                $deleteuser = new archiveduser(
+                    $user->id,
+                    $user->suspended,
+                    $user->lastaccess,
+                    $user->username,
+                    $user->deleted
+                );
+                $todelete[$key] = $deleteuser;
+                $this->log("[get_to_delete] " . $user->username . " marked");
             }
         }
         $this->log("[get_to_delete] marked " . count($todelete) . " users");
@@ -237,38 +246,32 @@ class ldapchecker implements userstatusinterface {
         }
 
         // Only users who are currently suspended are relevant.
-        $select = "auth='" . $this->config->auth_method . "' AND deleted=0 AND suspended=1";
-        $users = $DB->get_records_select('user', $select);
-        $toactivate = array();
+        $users = $DB->get_records_sql(
+            "SELECT tca.id, tca.suspended, tca.lastaccess, tca.username, tca.deleted
+                FROM {user} u
+                JOIN {tool_cleanupusers} tc ON u.id = tc.id
+                JOIN {tool_cleanupusers_archive} tca ON u.id = tca.id
+                WHERE u.auth = '" . $this->config->auth_method . "'
+                    AND u.suspended = 1
+                    AND u.deleted = 0
+                    AND tca.username NOT IN
+                        (SELECT username FROM {user} WHERE username IS NOT NULL)"
+        );
+        $toactivate = [];
 
         // $config = get_config('userstatus_ldapchecker');
 
         foreach ($users as $key => $user) {
-            if (!is_siteadmin($user)) {
-                // User was suspended by the plugin.
-                if ($DB->record_exists('tool_cleanupusers', array('id' => $user->id))) {
-                    if ($DB->record_exists('tool_cleanupusers_archive', array('id' => $user->id))) {
-                        $shadowuser = $DB->get_record('tool_cleanupusers_archive', array('id' => $user->id));
-                        if (!$DB->record_exists('user', array('username' => $shadowuser->username))) {
-//                            if (!$config->reactivate_only_found || array_key_exists($shadowuser->username, $this->lookup)) {
-                            if (array_key_exists($shadowuser->username, $this->lookup)) {
-                                // Es werden nur Nutzer zurückgeholt werden, die auch im LDAP
-                                // gefunden werden.
-                                $activateuser = new archiveduser($shadowuser->id, $shadowuser->suspended, $shadowuser->lastaccess,
-                                    $shadowuser->username, $shadowuser->deleted);
-                                $toactivate[$key] = $activateuser;
-                                $this->log("[get_to_reactivate] "
-                                    .$shadowuser->username . " / " . $user->username . " (suspended by plugin) marked");
-                            }
-                        } else {
-                            $this->log("[get_to_reactivate] "
-                                . $user->username . " (suspended by plugin) already in user table, skipping");
-                        }
-                    } else {
-                        $this->log("[get_to_reactivate] "
-                            . $user->username . " (suspended by plugin) has no entry in archive, skipping");
-                    }
-                }
+            if (!is_siteadmin($user) && array_key_exists($user->username, $this->lookup)) {
+                $activateuser = new archiveduser(
+                    $user->id,
+                    $user->suspended,
+                    $user->lastaccess,
+                    $user->username,
+                    $user->deleted
+                );
+                $toactivate[$key] = $activateuser;
+                $this->log("[get_to_reactivate] " . $user->username . " marked");
             }
         }
         $this->log("[get_to_reactivate] marked " . count($toactivate) . " users");

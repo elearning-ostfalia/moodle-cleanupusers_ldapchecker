@@ -23,8 +23,11 @@
  */
 namespace userstatus_ldapchecker;
 
+use core\session\exception;
 use tool_cleanupusers\archiveduser;
 use tool_cleanupusers\userstatusinterface;
+
+
 
 defined('MOODLE_INTERNAL') || die;
 
@@ -44,37 +47,40 @@ class ldapchecker implements userstatusinterface {
     /** @var array lookuptable for ldap users */
     private $lookup = array();
 
+    private $config;
+
     /**
      * This constructor sets timesuspend and timedelete from days to seconds.
      * @throws \dml_exception
      */
     public function __construct($testing = false) {
 
-        $config = get_config('userstatus_ldapchecker');
+        $this->config = get_config('userstatus_ldapchecker');
 
         // Calculates days to seconds.
-        $this->timedelete = $config->deletetime * 86400;
+        $this->timedelete = $this->config->deletetime * 86400;
 
         // Only connect to LDAP if we are not in testing case
         if ($testing === false) {
 
-            $ldap = ldap_connect($config->host_url) or die("Could not connect to $config->host_url");
+            $ldap = ldap_connect($this->config->host_url) or die("Could not connect to $this->config->host_url");
 
-            $bind = ldap_bind($ldap, $config->bind_dn, $config->bind_pw); // returns 1 if correct
+            $bind = ldap_bind($ldap, $this->config->bind_dn, $this->config->bind_pw); // returns 1 if correct
 
             if($bind) {
                 $this->log("ldap_bind successful");
 
-                $contexts = $config->contexts;
+                $contexts = $this->config->contexts;
 
-                $attributes = array('cn');
-                $filter = '(cn=*)';
+                $uid = $this->config->ldap_username_attribute;
+                $attributes = [$uid];
+                $filter = $this->config->search_filter; // '(cn=*)';
                 $search = ldap_search($ldap, $contexts, $filter, $attributes) or die("Error in search Query: " . ldap_error($ldap));
                 $result = ldap_get_entries($ldap, $search);
 
                 foreach ($result as $user) {
-                    if(isset($user['cn'])) {
-                        foreach ($user['cn'] as $cn) {
+                    if(isset($user[$uid])) {
+                        foreach ($user[$uid] as $cn) {
                             $this->lookup[$cn] = true;
                         }
                     }
@@ -84,13 +90,16 @@ class ldapchecker implements userstatusinterface {
 
             } else {
                 $this->log("ldap_bind failed");
+                // fatal error!
+                throw new exception("cannot connect to LDAP server");
             }
         }
 
     }
 
     private function log($text) {
-        file_put_contents("/var/log/httpd/debug_log_ldapchecker.log", "\n[".date("d-M-Y - H:i ")."] $text " , FILE_APPEND);
+        file_put_contents($this->config->log_folder . "/debug_log_ldapchecker.log",
+            "\n[".date("d-M-Y - H:i ")."] $text " , FILE_APPEND);
     }
 
     /**
@@ -105,17 +114,31 @@ class ldapchecker implements userstatusinterface {
      */
     public function get_to_suspend() {
         global $DB;
+        if (count($this->lookup) == 0) {
+            $this->log("no users from LDAP found => do not evaluate users to suspend");
+            return [];
+        }
 
-        $select = "auth='shibboleth' AND deleted=0 AND suspended=0";
-        $users = $DB->get_records_select('user', $select);
-        $tosuspend = array();
+        $select = "auth='" . $this->config->auth_method . "' AND deleted=0 AND suspended=0";
+        $this->log("[get_to_suspend] " . $select);
+        $users = $DB->get_records_select('user', $select, null, '',
+            "id, suspended, lastaccess, username, deleted");
+        $this->log("[get_to_suspend] found " . count($users) . " users in user table to check");
+
+
+        $tosuspend = [];
 
         foreach ($users as $key => $user) {
+            $this->log("[get_to_suspend] user " . $user->username);
             if (!is_siteadmin($user) && !array_key_exists($user->username, $this->lookup)) {
-                $informationuser = new archiveduser($user->id, $user->suspended, $user->lastaccess, $user->username, $user->deleted);
-                $tosuspend[$key] = $informationuser;
-                $this->log("[get_to_suspend] "
-                    . $user->username . " marked");
+                $suspenduser = new archiveduser(
+                    $user->id,
+                    $user->suspended,
+                    $user->lastaccess,
+                    $user->username,
+                    $user->deleted);
+                $tosuspend[$key] = $suspenduser;
+                $this->log("[get_to_suspend] " . $user->username . " marked");
             }
         }
         $this->log("[get_to_suspend] marked " . count($tosuspend) . " users");
@@ -133,12 +156,16 @@ class ldapchecker implements userstatusinterface {
      */
     public function get_never_logged_in() {
         global $DB;
-        $select = "auth='shibboleth' AND lastaccess=0 AND deleted=0 AND firstname!='Anonym'";
+        $select = "auth='" . $this->config->auth_method . "' AND lastaccess=0 AND deleted=0 AND firstname!='Anonym'";
         $arrayofuser = $DB->get_records_select('user', $select);
         $neverloggedin = array();
         foreach ($arrayofuser as $key => $user) {
             if (empty($user->lastaccess) && $user->deleted == 0) {
-                $informationuser = new archiveduser($user->id, $user->suspended, $user->lastaccess, $user->username,
+                $informationuser = new archiveduser(
+                    $user->id,
+                    $user->suspended,
+                    $user->lastaccess,
+                    $user->username,
                     $user->deleted);
                 $neverloggedin[$key] = $informationuser;
             }
@@ -161,7 +188,7 @@ class ldapchecker implements userstatusinterface {
         global $DB;
 
         // Select clause for users who are suspended.
-        $select = "auth='shibboleth' AND deleted=0 AND suspended=1 AND (lastaccess!=0 OR firstname='Anonym')";
+        $select = "auth='" . $this->config->auth_method . "' AND deleted=0 AND suspended=1 AND (lastaccess!=0 OR firstname='Anonym')";
         $users = $DB->get_records_select('user', $select);
         $todelete = array();
 
@@ -204,10 +231,17 @@ class ldapchecker implements userstatusinterface {
      */
     public function get_to_reactivate() {
         global $DB;
+        if (count($this->lookup) == 0) {
+            $this->log("no users from LDAP found => do not evaluate users to reactivate");
+            return [];
+        }
+
         // Only users who are currently suspended are relevant.
-        $select = "auth='shibboleth' AND deleted=0 AND suspended=1";
+        $select = "auth='" . $this->config->auth_method . "' AND deleted=0 AND suspended=1";
         $users = $DB->get_records_select('user', $select);
         $toactivate = array();
+
+        // $config = get_config('userstatus_ldapchecker');
 
         foreach ($users as $key => $user) {
             if (!is_siteadmin($user)) {
@@ -216,7 +250,10 @@ class ldapchecker implements userstatusinterface {
                     if ($DB->record_exists('tool_cleanupusers_archive', array('id' => $user->id))) {
                         $shadowuser = $DB->get_record('tool_cleanupusers_archive', array('id' => $user->id));
                         if (!$DB->record_exists('user', array('username' => $shadowuser->username))) {
+//                            if (!$config->reactivate_only_found || array_key_exists($shadowuser->username, $this->lookup)) {
                             if (array_key_exists($shadowuser->username, $this->lookup)) {
+                                // Es werden nur Nutzer zurückgeholt werden, die auch im LDAP
+                                // gefunden werden.
                                 $activateuser = new archiveduser($shadowuser->id, $shadowuser->suspended, $shadowuser->lastaccess,
                                     $shadowuser->username, $shadowuser->deleted);
                                 $toactivate[$key] = $activateuser;

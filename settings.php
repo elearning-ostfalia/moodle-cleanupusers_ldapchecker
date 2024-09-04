@@ -37,6 +37,20 @@ if ($hassiteconfig) {
         get_string('deletetime', 'userstatus_timechecker'),
         get_string('timechecker_time_to_delete', 'userstatus_timechecker'), 365, PARAM_INT));
 
+    // Log folder.
+    $settings->add(new admin_setting_configtext('userstatus_ldapchecker/log_folder',
+        "Folder for log files ", // get_string('auth_ldap_bind_dn_key', 'auth_ldap'),
+        "Folder for log files (must exist and be accessible)", // get_string('auth_ldap_bind_dn', 'auth_ldap'),
+        '/var/log/httpd', PARAM_RAW_TRIMMED));
+
+
+    // Authentication method.
+    $settings->add(new admin_setting_configtext('userstatus_ldapchecker/auth_method',
+        "Authentication method ", // get_string('auth_ldap_bind_dn_key', 'auth_ldap'),
+        "Authentication method for users who shall be handled by this plugin", // get_string('auth_ldap_bind_dn', 'auth_ldap'),
+        'ldap', PARAM_RAW_TRIMMED));
+
+
     // LDAP server settings.
     $settings->add(new admin_setting_heading('userstatus_ldapchecker/ldapserversettings',
         new lang_string('auth_ldap_server_settings', 'auth_ldap'), ''));
@@ -85,4 +99,21 @@ if ($hassiteconfig) {
         get_string('auth_ldap_contexts', 'auth_ldap'), '', PARAM_RAW_TRIMMED));
 
 
+    // Search filter.
+    $settings->add(new admin_setting_configtext('userstatus_ldapchecker/search_filter',
+        "LDAP search filter", // get_string('auth_ldap_bind_dn_key', 'auth_ldap'),
+        "LDAP search filter", // get_string('auth_ldap_bind_dn', 'auth_ldap'),
+        '', PARAM_RAW_TRIMMED));
+
+    // LDAP username attribute.
+    $settings->add(new admin_setting_configtext('userstatus_ldapchecker/ldap_username_attribute',
+        "LDAP username attribute", // get_string('auth_ldap_bind_dn_key', 'auth_ldap'),
+        "The LDAP attribute that is mapped to Moodle username", // get_string('auth_ldap_bind_dn', 'auth_ldap'),
+        'cn', PARAM_RAW_TRIMMED));
+
+
+/*    $settings->add(new admin_setting_configselect('userstatus_ldapchecker/reactivate_only_found',
+        "allow only users to be reactivated if user is found in LDAP",
+        "allow only users to be reactivated if user is found in LDAP", 1 , $yesno));
+*/
 }

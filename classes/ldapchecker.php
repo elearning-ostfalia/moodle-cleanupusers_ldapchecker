@@ -49,19 +49,11 @@ class ldapchecker implements userstatusinterface {
 
     private $config;
 
-    /**
-     * This constructor sets timesuspend and timedelete from days to seconds.
-     * @throws \dml_exception
-     */
-    public function __construct($testing = false) {
+    private $testing = false;
 
-        $this->config = get_config('userstatus_ldapchecker');
-
-        // Calculates days to seconds.
-        $this->timedelete = $this->config->deletetime * 86400;
-
+    private function init() {
         // Only connect to LDAP if we are not in testing case
-        if ($testing === false) {
+        if ($this->testing === false) {
 
             $ldap = ldap_connect($this->config->host_url) or die("Could not connect to $this->config->host_url");
 
@@ -96,6 +88,18 @@ class ldapchecker implements userstatusinterface {
         }
 
     }
+    /**
+     * This constructor sets timesuspend and timedelete from days to seconds.
+     * @throws \dml_exception
+     */
+    public function __construct($testing = false) {
+
+        $this->config = get_config('userstatus_ldapchecker');
+
+        // Calculates days to seconds.
+        $this->timedelete = $this->config->deletetime * 86400;
+        $this->testing = $testing;
+    }
 
     private function log($text) {
         file_put_contents($this->config->log_folder . "/debug_log_ldapchecker.log",
@@ -115,8 +119,11 @@ class ldapchecker implements userstatusinterface {
     public function get_to_suspend() {
         global $DB;
         if (count($this->lookup) == 0) {
-            $this->log("no users from LDAP found => do not evaluate users to suspend");
-            return [];
+            $this->init();
+            if (count($this->lookup) == 0) {
+                $this->log("no users from LDAP found => do not evaluate users to suspend");
+                return [];
+            }
         }
 
         $select = "auth='" . $this->config->auth_method . "' AND deleted=0 AND suspended=0";
@@ -194,8 +201,11 @@ class ldapchecker implements userstatusinterface {
         global $DB;
 
         if (count($this->lookup) == 0) {
-            $this->log("no users from LDAP found => do not evaluate users to delete");
-            return [];
+            $this->init();
+            if (count($this->lookup) == 0) {
+                $this->log("no users from LDAP found => do not evaluate users to delete");
+                return [];
+            }
         }
 
         $users = $DB->get_records_sql(
@@ -241,9 +251,12 @@ class ldapchecker implements userstatusinterface {
     public function get_to_reactivate() {
         global $DB;
         if (count($this->lookup) == 0) {
-            $this->log("no users from LDAP found => do not evaluate users to reactivate");
-            return [];
-        }
+            $this->init();
+            if (count($this->lookup) == 0) {
+                $this->log("no users from LDAP found => do not evaluate users to reactivate");
+                return [];
+            }
+      }
 
         // Only users who are currently suspended are relevant.
         $users = $DB->get_records_sql(
@@ -281,6 +294,14 @@ class ldapchecker implements userstatusinterface {
 
     public function fill_ldap_response_for_testing($dummy_ldap) {
         $this->lookup = $dummy_ldap;
+    }
+
+    /**
+     * returns the authentication method for all users being handled by this plugin
+     * @return string
+     */
+    public function get_authentication_method() :string {
+        return $this->config->auth_method;
     }
 
 }

@@ -57,6 +57,7 @@ class archive_user_task extends scheduled_task {
      * @return true
      */
     public function execute() {
+        /*
         // In case the admin did not submit a sub-plugin, the default is used.
         // This is very unlikely to happen since when installing the plugin a default is defined.
         // It could happen when sub-plugin is deleted manually (Uninstalling sub-plugins that are active is not allowed).
@@ -67,54 +68,61 @@ class archive_user_task extends scheduled_task {
         } else {
             $userstatuschecker = new userstatuswwu();
         }
+        */
 
-        // Private function is executed to suspend, delete and activate users.
-        $archivearray = $userstatuschecker->get_to_suspend();
-        $suspendresult = $this->change_user_deprovisionstatus($archivearray, 'suspend');
-        $unabletoarchive = $suspendresult['failures'];
-        $userarchived = $suspendresult['countersuccess'];
-        $archievdusers = $suspendresult['archivedusers'];
+        $pluginsenabled =  \core_plugin_manager::instance()->get_enabled_plugins("userstatus");
+        foreach ($pluginsenabled as $subplugin => $dir) {
+            $mysubpluginname = "\\userstatus_" . $subplugin . "\\" . $subplugin;
+            $userstatuschecker = new $mysubpluginname();
 
-        $reactivatearray = $userstatuschecker->get_to_reactivate();
-        $result = $this->change_user_deprovisionstatus($reactivatearray, 'reactivate');
-        $unabletoactivate = $result['failures'];
+            // Private function is executed to suspend, delete and activate users.
+            $archivearray = $userstatuschecker->get_to_suspend();
+            $suspendresult = $this->change_user_deprovisionstatus($archivearray, 'suspend', $subplugin);
+            $unabletoarchive = $suspendresult['failures'];
+            $userarchived = $suspendresult['countersuccess'];
+            $archievdusers = $suspendresult['archivedusers'];
 
-        $arraytodelete = $userstatuschecker->get_to_delete();
-        $deleteresult = $this->change_user_deprovisionstatus($arraytodelete, 'delete');
-        $unabletodelete = $deleteresult['failures'];
-        $userdeleted = $deleteresult['countersuccess'];
+            $reactivatearray = $userstatuschecker->get_to_reactivate();
+            $result = $this->change_user_deprovisionstatus($reactivatearray, 'reactivate', $subplugin);
+            $unabletoactivate = $result['failures'];
 
-        // Log users archived in the last task
-        $this->write_csv($archievdusers);
+            $arraytodelete = $userstatuschecker->get_to_delete();
+            $deleteresult = $this->change_user_deprovisionstatus($arraytodelete, 'delete', $subplugin);
+            $unabletodelete = $deleteresult['failures'];
+            $userdeleted = $deleteresult['countersuccess'];
+
+            // Log users archived in the last task
+            $this->write_csv($archievdusers);
 
 
-        // Admin is informed about the cron-job and the amount of users that are affected.
+            // Admin is informed about the cron-job and the amount of users that are affected.
 
-        $admin = get_admin();
-        // Number of users suspended or deleted.
-        $messagetext = get_string('e-mail-archived', 'tool_cleanupusers', $userarchived) .
-            "\r\n" .get_string('e-mail-deleted', 'tool_cleanupusers', $userdeleted);
+            $admin = get_admin();
+            // Number of users suspended or deleted.
+            $messagetext = get_string('e-mail-archived', 'tool_cleanupusers', $userarchived) .
+                "\r\n" . get_string('e-mail-deleted', 'tool_cleanupusers', $userdeleted);
 
-        // No Problems occured during the cron-job.
-        if (empty($unabletoactivate) and empty($unabletoarchive) and empty($unabletodelete)) {
-            $messagetext .= "\r\n\r\n" . get_string('e-mail-noproblem', 'tool_cleanupusers');
-        } else {
-            // Extra information for problematic users.
-            $messagetext .= "\r\n\r\n" . get_string('e-mail-problematic_delete', 'tool_cleanupusers',
-                    count($unabletodelete)) . "\r\n\r\n" . get_string('e-mail-problematic_suspend', 'tool_cleanupusers',
-                    count($unabletoarchive)) . "\r\n\r\n" . get_string('e-mail-problematic_reactivate', 'tool_cleanupusers',
-                    count($unabletoactivate));
+            // No Problems occured during the cron-job.
+            if (empty($unabletoactivate) and empty($unabletoarchive) and empty($unabletodelete)) {
+                $messagetext .= "\r\n\r\n" . get_string('e-mail-noproblem', 'tool_cleanupusers');
+            } else {
+                // Extra information for problematic users.
+                $messagetext .= "\r\n\r\n" . get_string('e-mail-problematic_delete', 'tool_cleanupusers',
+                        count($unabletodelete)) . "\r\n\r\n" . get_string('e-mail-problematic_suspend', 'tool_cleanupusers',
+                        count($unabletoarchive)) . "\r\n\r\n" . get_string('e-mail-problematic_reactivate', 'tool_cleanupusers',
+                        count($unabletoactivate));
+            }
+
+            // Email is send from the do not reply user.
+            $user = new \core_user();
+            $sender = $user->get_user(-10);
+            email_to_user($admin, $sender, 'Update Infos Cron Job tool_cleanupusers', $messagetext);
+
+            // Triggers deprovisionusercronjob_completed event.
+            $context = \context_system::instance();
+            $event = deprovisionusercronjob_completed::create_simple($context, $userarchived, $userdeleted);
+            $event->trigger();
         }
-
-        // Email is send from the do not reply user.
-        $user = new \core_user();
-        $sender = $user->get_user(-10);
-        email_to_user($admin, $sender, 'Update Infos Cron Job tool_cleanupusers', $messagetext);
-
-        // Triggers deprovisionusercronjob_completed event.
-        $context = \context_system::instance();
-        $event = deprovisionusercronjob_completed::create_simple($context, $userarchived, $userdeleted);
-        $event->trigger();
 
         return true;
     }
@@ -127,7 +135,7 @@ class archive_user_task extends scheduled_task {
      * @return array ['numbersuccess'] successfully changed users ['failures'] userids, who could not be changed.
      * @throws \coding_exception
      */
-    private function change_user_deprovisionstatus($userarray, $intention) {
+    private function change_user_deprovisionstatus($userarray, $intention, $checker) {
         // Checks whether the intention is valid.
         if (!in_array($intention, array('suspend', 'reactivate', 'delete'))) {
             throw new \coding_exception('Invalid parameters in tool_cleanupusers.');
@@ -152,7 +160,7 @@ class archive_user_task extends scheduled_task {
                 try {
                     switch ($intention) {
                         case 'suspend':
-                            $changinguser->archive_me();
+                            $changinguser->archive_me($checker);
                             array_push($archivedusers, [$user->id, $user->username, $user->firstname, $user->lastname,date('d.m.Y h:i:s', $user->lastaccess)]);
                             break;
                         case 'reactivate':

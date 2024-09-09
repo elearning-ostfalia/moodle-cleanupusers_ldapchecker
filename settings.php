@@ -38,11 +38,11 @@ if ($hassiteconfig) {
         get_string('timechecker_time_to_delete', 'userstatus_timechecker'), 365, PARAM_INT));
 
     // Log folder.
-    $settings->add(new admin_setting_configtext('userstatus_ldapchecker/log_folder',
+/*    $settings->add(new admin_setting_configtext('userstatus_ldapchecker/log_folder',
         "Folder for log files ", // get_string('auth_ldap_bind_dn_key', 'auth_ldap'),
         "Folder for log files (must exist and be accessible)", // get_string('auth_ldap_bind_dn', 'auth_ldap'),
         '/var/log/httpd', PARAM_RAW_TRIMMED));
-
+*/
 
     // Authentication method.
     $settings->add(new admin_setting_configtext('userstatus_ldapchecker/auth_method',

@@ -26,6 +26,8 @@ namespace userstatus_ldapchecker;
 use core\session\exception;
 use tool_cleanupusers\archiveduser;
 use tool_cleanupusers\userstatusinterface;
+use tool_cleanupusers\userstatuschecker;
+
 
 
 
@@ -39,7 +41,7 @@ defined('MOODLE_INTERNAL') || die;
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 
-class ldapchecker implements userstatusinterface {
+class ldapchecker extends userstatuschecker { // implements userstatusinterface {
 
     /** @var int seconds until a user should be deleted */
     private $timedelete;
@@ -93,6 +95,8 @@ class ldapchecker implements userstatusinterface {
      * @throws \dml_exception
      */
     public function __construct($testing = false) {
+        // debugging("ldapchecker::__construct");
+        parent::__construct($testing);
 
         $this->config = get_config('userstatus_ldapchecker');
 
@@ -101,10 +105,29 @@ class ldapchecker implements userstatusinterface {
         $this->testing = $testing;
     }
 
-    private function log($text) {
-        file_put_contents($this->config->log_folder . "/debug_log_ldapchecker.log",
-            "\n[".date("d-M-Y - H:i ")."] $text " , FILE_APPEND);
+
+    private function is_initialised() {
+        if (count($this->lookup) == 0) {
+            $this->init();
+            if (count($this->lookup) == 0) {
+                return false;
+            }
+        }
+        return true;
     }
+
+    public function condition_sql() : array {
+        return ["" , null];
+    }
+
+    public function shall_suspend($user) : bool {
+        // check initialisation state (todo: should not be checked for every user!)
+        if (!$this->is_initialised()) {
+            return false;
+        }
+        return (array_key_exists($user->username, $this->lookup));
+    }
+
 
     /**
      * All users who are not suspended and not deleted are selected. If a user did not sign in for the hitherto
@@ -116,6 +139,7 @@ class ldapchecker implements userstatusinterface {
      * @return array of users to suspend
      * @throws \dml_exception
      */
+    /*
     public function get_to_suspend() {
         global $DB;
         if (count($this->lookup) == 0) {
@@ -132,11 +156,9 @@ class ldapchecker implements userstatusinterface {
             "id, suspended, lastaccess, username, deleted");
         $this->log("[get_to_suspend] found " . count($users) . " users in user table to check");
 
-
         $tosuspend = [];
 
         foreach ($users as $key => $user) {
-            $this->log("[get_to_suspend] user " . $user->username);
             if (!is_siteadmin($user) && !array_key_exists($user->username, $this->lookup)) {
                 $suspenduser = new archiveduser(
                     $user->id,
@@ -151,7 +173,7 @@ class ldapchecker implements userstatusinterface {
         $this->log("[get_to_suspend] marked " . count($tosuspend) . " users");
 
         return $tosuspend;
-    }
+    }*/
 
     /**
      * All users who never logged in will be returned in the array.
@@ -161,6 +183,7 @@ class ldapchecker implements userstatusinterface {
      * @return array of users who never logged in
      * @throws \dml_exception
      */
+    /*
     public function get_never_logged_in() {
         global $DB;
         $arrayofuser = $DB->get_records_sql(
@@ -186,7 +209,7 @@ class ldapchecker implements userstatusinterface {
 
         return $neverloggedin;
     }
-
+*/
     /**
      * All users who should be deleted will be returned in the array.
      * The array includes merely the necessary information which comprises the userid, lastaccess, suspended, deleted
